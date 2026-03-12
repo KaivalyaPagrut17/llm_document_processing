@@ -3,6 +3,7 @@ Phase 2: Semantic Search Module
 Handles document embedding generation and semantic search
 """
 import json
+import re
 import numpy as np
 import chromadb
 from sentence_transformers import SentenceTransformer
