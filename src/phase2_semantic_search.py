@@ -69,7 +69,6 @@ class SemanticSearchEngine:
             chunks = json.load(f)
 
         logger.info(f"Generating embeddings for {len(chunks)} chunks...")
-        logger.info(f"Batch size = {batch_size}")
 
         # Extract text content
         chunk_texts = [chunk['text'] for chunk in chunks]
@@ -77,6 +76,7 @@ class SemanticSearchEngine:
         # Generate embeddings with progress bar
         batch_size = self.config['embeddings']['batch_size']
         normalize = self.config['embeddings']['normalize']
+        logger.info(f"Batch size = {batch_size}")
 
         embeddings = self.model.encode(
             chunk_texts,
