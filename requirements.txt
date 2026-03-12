@@ -1,0 +1,51 @@
+# LLM Document Processing System - Phase 1-2 Requirements
+# Document Processing + Semantic Search Only
+
+# ===========================================
+# DOCUMENT PROCESSING
+# ===========================================
+PyMuPDF>=1.23.0        # PDF processing
+python-docx>=0.8.11    # DOCX processing  
+pdfplumber>=0.10.0     # Alternative PDF processing
+
+# ===========================================
+# ML/NLP LIBRARIES
+# ===========================================
+torch>=2.0.0
+sentence-transformers>=2.6.1
+transformers>=4.40.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+
+# ===========================================
+# VECTOR DATABASE
+# ===========================================
+chromadb>=0.4.0
+faiss-cpu>=1.7.4
+
+# ===========================================
+# TEXT PROCESSING
+# ===========================================
+regex>=2023.0.0
+nltk>=3.8.1
+
+# ===========================================
+# CONFIGURATION & ENVIRONMENT
+# ===========================================
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# ===========================================
+# DATA PROCESSING
+# ===========================================
+pandas>=2.0.0
+
+# ===========================================
+# UTILITIES
+# ===========================================
+tqdm>=4.65.0
+
+# ===========================================
+# TYPE HINTS
+# ===========================================
+typing-extensions>=4.8.0

@@ -1,0 +1,65 @@
+# Configuration for Phase 1-2 Implementation
+
+# Project Settings
+project:
+  name: "LLM Document Processing System"
+  version: "0.5.0"
+  description: "Document processing and semantic search (Phase 1-2)"
+
+# File Paths
+paths:
+  raw_documents: "./data/raw_documents/"
+  processed_data: "./data/processed/"
+  vector_db: "./data/vector_db/chroma_db/"
+  logs: "./logs/"
+  
+# Document Processing Settings
+document_processing:
+  supported_formats: [".pdf", ".docx", ".eml", ".txt"]
+  # chunking controls (new)
+  chunk_method: "sentence"      # options: sentence, paragraph, hybrid
+  chunk_size: 200               # target words per chunk (sentence mode)
+  chunk_overlap: 2              # overlap in sentences when sentence mode
+  max_file_size_mb: 50
+  
+  # Text cleaning patterns
+  cleaning_patterns:
+    remove_headers: true
+    remove_footers: true
+    normalize_whitespace: true
+    preserve_medical_terms: true
+
+# Embedding Settings  
+embeddings:
+  model_name: "BAAI/bge-base-en-v1.5"
+  batch_size: 32
+  normalize: true
+  instruction_prefix: "Represent this sentence for searching relevant passages: "
+
+# Vector Database
+vector_db:
+  provider: "chromadb"
+  collection_name: "document_chunks"
+  similarity_metric: "cosine"
+  persist_directory: "./data/vector_db/chroma_db/"
+
+# Semantic Search
+semantic_search:
+  top_k: 5
+  similarity_threshold: 0.0   # lowered for demo, accept all results
+  rerank: false
+
+# Logging
+logging:
+  level: "INFO"
+  format: "json"
+  file: "./logs/app.log"
+  rotation: "1 day"
+  retention: "30 days"
+
+# Performance
+performance:
+  cache_embeddings: true
+  cache_ttl: 3600  # seconds
+  enable_gpu: true
+  max_batch_size: 32
