@@ -19,9 +19,9 @@ import nltk
 
 # ensure punkt is available on first run
 try:
-    nltk.data.find("tokenizers/punkt")
+    nltk.data.find("tokenizers/punkt_tab")
 except LookupError:
-    nltk.download("punkt")
+    nltk.download("punkt_tab")
 
 
 # --------------------------------------------------------------------------- #
@@ -372,7 +372,7 @@ def main() -> None:
     print(f"   Total chunks generated : {len(chunks)}")
     print(f"   Output folder          : {proc.processed_path}")
     print("   Files created:")
-    print("     - document_log.json")
+    print("     - document_log.json") 
     print("     - extracted_text.json")
     print("     - chunked_documents.json")
     print("  Sample chunk:")

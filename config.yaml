@@ -18,7 +18,7 @@ document_processing:
   supported_formats: [".pdf", ".docx", ".eml", ".txt"]
   # chunking controls (new)
   chunk_method: "sentence"      # options: sentence, paragraph, hybrid
-  chunk_size: 200               # target words per chunk (sentence mode)
+  chunk_size: 128               # target words per chunk (sentence mode)
   chunk_overlap: 2              # overlap in sentences when sentence mode
   max_file_size_mb: 50
   

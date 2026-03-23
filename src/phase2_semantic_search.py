@@ -1,9 +1,12 @@
+import os
+os.environ['HF_HUB_DISABLE_SSL_VERIFICATION'] = '1'
+
 """
 Phase 2: Semantic Search Module
 Handles document embedding generation and semantic search
 """
 import json
-import re
+import regex as re
 import numpy as np
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -71,8 +74,10 @@ class SemanticSearchEngine:
 
         logger.info(f"Generating embeddings for {len(chunks)} chunks...")
 
-        # Extract text content
-        chunk_texts = [chunk['text'] for chunk in chunks]
+        # Extract text content — prepend instruction prefix so chunk and query
+        # embeddings live in the same space (required for BGE models)
+        instruction = self.config['embeddings'].get('instruction_prefix', '')
+        chunk_texts = [instruction + chunk['text'] for chunk in chunks]
 
         # Generate embeddings with progress bar
         batch_size = self.config['embeddings']['batch_size']
