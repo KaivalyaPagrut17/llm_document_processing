@@ -6,10 +6,10 @@ Phase 2: Semantic Search Module
 Handles document embedding generation and semantic search
 """
 import json
-import regex as re
+import re
 import numpy as np
 import chromadb
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 from loguru import logger
@@ -25,6 +25,15 @@ class SemanticSearchEngine:
         model_name = self.config['embeddings']['model_name']
         logger.info(f"Loading embedding model: {model_name}")
         self.model = SentenceTransformer(model_name)
+
+        # Load cross-encoder reranker (only if enabled in config)
+        self.rerank_enabled = self.config['semantic_search'].get('rerank', False)
+        if self.rerank_enabled:
+            reranker_name = self.config['semantic_search'].get('reranker_model', 'cross-encoder/ms-marco-MiniLM-L-6-v2')
+            logger.info(f"Loading reranker model: {reranker_name}")
+            self.reranker = CrossEncoder(reranker_name)
+        else:
+            logger.info("Reranking disabled")
         
         # Initialize ChromaDB
         self.vector_db_path = Path(self.config['vector_db']['persist_directory'])
@@ -74,8 +83,7 @@ class SemanticSearchEngine:
 
         logger.info(f"Generating embeddings for {len(chunks)} chunks...")
 
-        # Extract text content — prepend instruction prefix so chunk and query
-        # embeddings live in the same space (required for BGE models)
+        # BGE requires a passage-specific prefix for document chunks
         instruction = self.config['embeddings'].get('instruction_prefix', '')
         chunk_texts = [instruction + chunk['text'] for chunk in chunks]
 
@@ -126,13 +134,16 @@ class SemanticSearchEngine:
         # Create or get collection
         try:
             self.collection = self.chroma_client.get_collection(self.collection_name)
-            logger.info(f"Using existing collection: {self.collection_name}")
             if not force:
                 logger.info("Skipping re-insertion because collection already exists and force=False.")
                 return
+            # force=True — delete and recreate to avoid duplicates
+            self.chroma_client.delete_collection(self.collection_name)
+            logger.info(f"Deleted existing collection: {self.collection_name}")
         except Exception:
-            self.collection = self.chroma_client.create_collection(self.collection_name)
-            logger.info(f"Created new collection: {self.collection_name}")
+            pass
+        self.collection = self.chroma_client.create_collection(self.collection_name)
+        logger.info(f"Created new collection: {self.collection_name}")
 
         # Prepare data for insertion
         ids = [f"chunk_{i}" for i in range(len(chunks))]
@@ -144,7 +155,8 @@ class SemanticSearchEngine:
                 "chunk_id": chunk['chunk_id'],
                 "doc_type": chunk.get('doc_type', 'unknown'),
                 "chunk_index": chunk.get('chunk_index', 0),
-                "word_count": chunk.get('word_count', 0)
+                "word_count": chunk.get('word_count', 0),
+                **({"page": chunk['page']} if 'page' in chunk else {}),
             }
             for chunk in chunks
         ]
@@ -163,19 +175,11 @@ class SemanticSearchEngine:
 
         logger.success(f"Vector database initialized with {len(chunks)} chunks")
 
-    def _preprocess_query(self, query: str) -> str:
-        """Lowercase, strip punctuation and expand abbreviations."""
-        q = query.lower()
-        q = re.sub(r"[\p{Punct}]", "", q)
-        # simple abbreviation expansion
-        abbr = {"max": "maximum", "min": "minimum"}
-        for k,v in abbr.items():
-            q = re.sub(rf"\b{k}\b", v, q)
-        return q
-
     def encode_query(self, query: str) -> np.ndarray:
         """Encode a query into an embedding vector"""
-        instruction = self.config['embeddings'].get('instruction_prefix', "")
+        # Use query-specific instruction prefix (different from document prefix)
+        instruction = self.config['embeddings'].get('query_instruction_prefix',
+                      self.config['embeddings'].get('instruction_prefix', ''))
         query_with_instruction = instruction + query
         
         embedding = self.model.encode(
@@ -200,14 +204,16 @@ class SemanticSearchEngine:
         
         logger.info(f"Searching for: '{query}'")
         
-        # Preprocess and encode query
-        query_clean = self._preprocess_query(query)
-        query_embedding = self.encode_query(query_clean)
+        # Encode query directly — BGE embeddings degrade with punctuation stripping
+        query_embedding = self.encode_query(query)
         
+        # fetch more candidates when reranking so the cross-encoder has a wider pool
+        fetch_k = top_k * 3 if self.rerank_enabled else top_k
+
         # Perform search
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k,
+            n_results=fetch_k,
             include=["documents", "metadatas", "distances"]
         )
         logger.info(f"Raw hits returned: {len(results['documents'][0])}")
@@ -231,6 +237,19 @@ class SemanticSearchEngine:
         logger.info(f"Filtered {len(formatted_results)}/{len(results['documents'][0])} hits above threshold")
         
         logger.info(f"Found {len(formatted_results)} relevant results")
+
+        # Rerank using cross-encoder
+        if formatted_results and self.rerank_enabled:
+            pairs = [[query, r['text']] for r in formatted_results]
+            rerank_scores = self.reranker.predict(pairs)
+            for r, s in zip(formatted_results, rerank_scores):
+                r['rerank_score'] = float(s)
+            formatted_results.sort(key=lambda x: x['rerank_score'], reverse=True)
+            formatted_results = formatted_results[:top_k]  # trim back to top_k after reranking
+            for i, r in enumerate(formatted_results, 1):
+                r['rank'] = i
+            logger.info(f"Reranking complete — top rerank score: {formatted_results[0]['rerank_score']:.4f}")
+
         return formatted_results
 
     def search_interactive(self):
@@ -261,11 +280,12 @@ class SemanticSearchEngine:
                 
                 for result in results:
                     metadata = result['metadata']
-                    score = result['similarity_score']
-                    
-                    print(f"Rank {result['rank']} (Score: {score:.4f})")
+                    # show rerank_score if available, else cosine similarity_score
+                    score = result.get('rerank_score', result['similarity_score'])
+                    score_label = "Rerank Score" if 'rerank_score' in result else "Score"
+
+                    print(f"Rank {result['rank']} ({score_label}: {score:.4f})")
                     print(f"   Document: {metadata.get('file_name','?')} | Chunk: {metadata.get('chunk_id','?')}")
-                    # optional page number metadata
                     if 'page' in metadata:
                         print(f"   Page: {metadata['page']}")
                     print(f"   Clause: {result['text'][:300]}...")
@@ -356,7 +376,9 @@ def main():
             
             for result in results[:2]:  # Show top 2 results
                 metadata = result['metadata']
-                print(f"  {metadata['file_name']} (Score: {result['similarity_score']:.3f})")
+                score = result.get('rerank_score', result['similarity_score'])
+                score_label = "Rerank Score" if 'rerank_score' in result else "Score"
+                print(f"  {metadata['file_name']} ({score_label}: {score:.3f})")
                 print(f"     {result['text'][:150]}...")
         
         # Optional: Start interactive mode

@@ -101,30 +101,58 @@ class DocumentProcessor:
         return log
 
     @staticmethod
-    def _detect_doc_type(fname: str) -> str:
+    def _detect_doc_type(fname: str, content_hint: str = "") -> str:
+        """Detect document type from filename first, then fall back to content."""
         name = fname.lower()
-        if any(k in name for k in ("policy", "insurance", "claim")):
+        text = content_hint.lower()
+
+        # filename-based detection
+        if any(k in name for k in ("policy", "insurance", "insur", "coverage", "premium", "underwriting")):
             return "insurance_policy"
-        if any(k in name for k in ("contract", "agreement")):
+        if any(k in name for k in ("claim", "reimbursement", "settlement", "compensation")):
+            return "claim"
+        if any(k in name for k in ("contract", "agreement", "terms", "conditions", "tnc", "toc")):
             return "contract"
+        if any(k in name for k in ("exclusion", "exempt", "waiver")):
+            return "exclusion"
+        if any(k in name for k in ("schedule", "annex", "appendix", "addendum")):
+            return "schedule"
+        if any(k in name for k in ("invoice", "receipt", "bill", "payment")):
+            return "financial"
+        if any(k in name for k in ("report", "summary", "statement")):
+            return "report"
         if fname.endswith(".eml"):
             return "email"
+
+        # content-based fallback using first 500 chars
+        if any(k in text for k in ("insurance", "insured", "premium", "policyholder", "coverage", "sum assured")):
+            return "insurance_policy"
+        if any(k in text for k in ("claim", "reimbursement", "settlement")):
+            return "claim"
+        if any(k in text for k in ("contract", "agreement", "terms and conditions")):
+            return "contract"
+        if any(k in text for k in ("hr policy", "human resources", "personnel", "employee")):
+            return "hr_policy"
+
         return "document"
 
     # --------------------------------------------------------------------- #
     # 2.  Extraction helpers
     # --------------------------------------------------------------------- #
     @staticmethod
-    def _pdf_to_text(path: Path) -> str:
+    def _pdf_to_text(path: Path) -> List[Dict[str, Any]]:
+        """Return a list of {page, text} dicts, one per PDF page."""
         try:
-            text = ""
+            pages = []
             with fitz.open(path) as doc:
-                for page in doc:
-                    text += page.get_text()
-            return text.strip()
+                for i, page in enumerate(doc):
+                    text = page.get_text().strip()
+                    if text:
+                        pages.append({"page": i + 1, "text": text})
+            return pages
         except Exception as e:
             logger.error(f"PDF extract failed {path.name}: {e}")
-            return ""
+            return []
 
     @staticmethod
     def _docx_to_text(path: Path) -> str:
@@ -163,9 +191,11 @@ class DocumentProcessor:
             p = Path(entry["file_path"])
             fmt = entry["format"]
             text = ""
+            pages = []  # only populated for PDFs
 
             if fmt == ".pdf":
-                text = self._pdf_to_text(p)
+                pages = self._pdf_to_text(p)
+                text = "\n".join(pg["text"] for pg in pages)
             elif fmt == ".docx":
                 text = self._docx_to_text(p)
             elif fmt == ".eml":
@@ -177,13 +207,14 @@ class DocumentProcessor:
                 extracted.append(
                     {
                         "file_name": entry["file_name"],
-                        "doc_type": entry["doc_type"],
+                        "doc_type": self._detect_doc_type(entry["file_name"], text[:500]),
                         "content": text,
                         "char_count": len(text),
                         "word_count": len(text.split()),
+                        "pages": pages,  # list of {page, text} for PDFs; [] for others
                     }
                 )
-                logger.debug(f"Extracted: {entry['file_name']} ({len(text)} chars)")
+                logger.debug(f"Extracted: {entry['file_name']} ({len(text)} chars, {len(pages)} pages)")
             else:
                 logger.warning(f"No text extracted from {entry['file_name']}")
 
@@ -240,53 +271,36 @@ class DocumentProcessor:
     def chunk(self, text: str) -> List[str]:
         """Create chunks based on configured strategy.
 
-        sentence - split text into sentences and accumulate up to chunk_size
-        paragraph - split on blank lines
-        hybrid - paragraph boundaries first, then sentence-split long paragraphs
+        sentence - accumulate sentences up to chunk_size words
+        paragraph - one chunk per blank-line paragraph
+        hybrid   - paragraph boundaries first, sentence-split long paragraphs
+        clause   - split on numbered clause boundaries, sentence-split only if too long
         """
         method = self.chunk_method.lower()
+        size   = self.chunk_size
+        overlap = self.chunk_overlap
 
         if method == "paragraph":
-            paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-            return paras
+            return [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
 
-        # sentence-based logic (also used by hybrid inside paragraphs)
+        if method == "clause":
+            return self._chunk_by_clause(text, size)
+
         sentences = nltk.sent_tokenize(text)
-        # further split sentences into clauses to avoid mid-clause cuts
-        def sentence_to_clauses(sent: str) -> List[str]:
-            # split on semicolons or period-space unless it's an abbreviation
-            return re.split(r'(?<=[\.;])\s+', sent)
-        clauses = []
-        for s in sentences:
-            clauses.extend(sentence_to_clauses(s))
         chunks: List[str] = []
         current: List[str] = []
         current_words = 0
 
-        def flush():
-            nonlocal current, current_words
-            if current:
-                chunks.append(" ".join(current).strip())
-            current = []
-            current_words = 0
-
-        size = self.chunk_size
-        overlap = self.chunk_overlap  # sentences
-
         if method == "hybrid":
-            # split into paragraphs first, then apply sentence logic per paragraph
             paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
             all_chunks: List[str] = []
             for p in paras:
                 p_sents = nltk.sent_tokenize(p)
-                # reuse sentence accumulation for each paragraph
-                current = []
-                current_words = 0
+                current, current_words = [], 0
                 for s in p_sents:
                     wcount = len(s.split())
                     if current_words + wcount > size and current:
                         all_chunks.append(" ".join(current).strip())
-                        # carry overlap
                         current = current[-overlap:]
                         current_words = sum(len(x.split()) for x in current)
                     current.append(s)
@@ -295,13 +309,11 @@ class DocumentProcessor:
                     all_chunks.append(" ".join(current).strip())
             return all_chunks
 
-        # default sentence mode
+        # default: sentence mode
         for sent in sentences:
             wcount = len(sent.split())
             if current_words + wcount > size and current:
-                # emit chunk
                 chunks.append(" ".join(current).strip())
-                # apply overlap in sentences
                 current = current[-overlap:]
                 current_words = sum(len(x.split()) for x in current)
             current.append(sent)
@@ -309,6 +321,55 @@ class DocumentProcessor:
         if current:
             chunks.append(" ".join(current).strip())
         return chunks
+
+    def _chunk_by_clause(self, text: str, max_words: int) -> List[str]:
+        """Split on numbered clause / lettered item boundaries.
+
+        Keeps each clause intact. Only splits a clause further if it
+        exceeds max_words, in which case sentence-chunking is applied
+        to that clause alone.
+        """
+        # clause boundary: line starting with number/letter patterns like
+        # 1. / 1.1 / (a) / a) / Section / SECTION or a blank line
+        clause_boundary = re.compile(
+            r"(?m)^(?="
+            r"\d+[.)\s]"           # 1. or 1) or 1 
+            r"|\d+\.\d+"           # 1.1
+            r"|\([a-zA-Z]\)"       # (a)
+            r"|[a-zA-Z]\)"         # a)
+            r"|(?:Section|SECTION|Clause|CLAUSE)\s"
+            r")"
+        )
+
+        # split into raw clauses
+        raw_clauses = [c.strip() for c in clause_boundary.split(text) if c.strip()]
+
+        # if no clause markers found fall back to paragraph split
+        if len(raw_clauses) <= 1:
+            raw_clauses = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+
+        chunks: List[str] = []
+        for clause in raw_clauses:
+            if len(clause.split()) <= max_words:
+                # clause fits — keep it whole
+                chunks.append(clause)
+            else:
+                # clause too long — sentence-split it
+                sents = nltk.sent_tokenize(clause)
+                current: List[str] = []
+                current_words = 0
+                for s in sents:
+                    wcount = len(s.split())
+                    if current_words + wcount > max_words and current:
+                        chunks.append(" ".join(current).strip())
+                        current = current[-1:]  # 1 sentence overlap
+                        current_words = sum(len(x.split()) for x in current)
+                    current.append(s)
+                    current_words += wcount
+                if current:
+                    chunks.append(" ".join(current).strip())
+
+        return [c for c in chunks if c]
 
     # --------------------------------------------------------------------- #
     # 6. Full pipeline
@@ -321,35 +382,58 @@ class DocumentProcessor:
         chunked: List[Dict[str, Any]] = []
 
         for doc in tqdm(extracted, desc="Cleaning & chunking"):
-            orig_text = doc["content"]
-            cleaned_text = self.clean_text(orig_text)
             cleaned_list.append({
                 "file_name": doc["file_name"],
                 "doc_type": doc["doc_type"],
-                "content": cleaned_text,
-                "char_count": len(cleaned_text),
-                "word_count": len(cleaned_text.split()),
+                "content": self.clean_text(doc["content"]),
+                "char_count": len(doc["content"]),
+                "word_count": len(doc["content"].split()),
             })
 
-            # detect section titles (all-caps lines) in cleaned text
-            section_title = None
-            for line in cleaned_text.splitlines():
-                if line.strip() and line.strip().upper() == line.strip():
-                    section_title = line.strip()
-                    break
+            current_section = None
+            idx = 1
 
-            for idx, ch in enumerate(self.chunk(cleaned_text), 1):
-                # simple clause detection: number of clauses in chunk
-                metadata = {
-                    "file_name": doc["file_name"],
-                    "chunk_id": f"{Path(doc['file_name']).stem}-C{idx}",
-                    "doc_type": doc["doc_type"],
-                    "chunk_index": idx,
-                    "word_count": len(ch.split()),
-                }
-                if section_title:
-                    metadata["section_title"] = section_title
-                chunked.append({**metadata, "text": ch})
+            # PDFs: chunk per page so page number is exact
+            if doc.get("pages"):
+                for pg in doc["pages"]:
+                    cleaned_page = self.clean_text(pg["text"])
+                    for ch in self.chunk(cleaned_page):
+                        for line in ch.splitlines():
+                            if line.strip() and line.strip().upper() == line.strip() and len(line.strip()) > 3:
+                                current_section = line.strip()
+                                break
+                        metadata = {
+                            "file_name": doc["file_name"],
+                            "chunk_id": f"{Path(doc['file_name']).stem}-C{idx}",
+                            "doc_type": doc["doc_type"],
+                            "chunk_index": idx,
+                            "word_count": len(ch.split()),
+                            "page": pg["page"],  # exact page, no calculation
+                        }
+                        if current_section:
+                            metadata["section_title"] = current_section
+                        chunked.append({**metadata, "text": ch})
+                        idx += 1
+
+            # non-PDF: no page info available
+            else:
+                cleaned_text = self.clean_text(doc["content"])
+                for ch in self.chunk(cleaned_text):
+                    for line in ch.splitlines():
+                        if line.strip() and line.strip().upper() == line.strip() and len(line.strip()) > 3:
+                            current_section = line.strip()
+                            break
+                    metadata = {
+                        "file_name": doc["file_name"],
+                        "chunk_id": f"{Path(doc['file_name']).stem}-C{idx}",
+                        "doc_type": doc["doc_type"],
+                        "chunk_index": idx,
+                        "word_count": len(ch.split()),
+                    }
+                    if current_section:
+                        metadata["section_title"] = current_section
+                    chunked.append({**metadata, "text": ch})
+                    idx += 1
 
         # write cleaned intermediate file
         (self.processed_path / "cleaned_text.json").write_text(

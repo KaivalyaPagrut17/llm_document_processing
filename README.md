@@ -130,12 +130,13 @@ was used for chunking.
 
 ### Other enhancements
 
-* Interactive search now preprocesses queries (lowercase, strip
-  punctuation, expand abbreviations) for better embedding quality.
-* You can customize the *query instruction* prefix used by the embedding
-  model via `embeddings.instruction_prefix` in `config.yaml`; this is
-  prepended to every user query before encoding and can improve
-  retrieval relevance.
+* Queries are passed directly to the embedding model without preprocessing
+  (no lowercasing or punctuation stripping) — BGE models perform better
+  on natural-language text.
+* Two separate instruction prefixes are now used:
+  - `embeddings.instruction_prefix` — prepended to **document chunks** during indexing.
+  - `embeddings.query_instruction_prefix` — prepended to **queries** during search.
+  This asymmetric design is required by BGE models for accurate retrieval.
 * Detailed logging has been added throughout phase‑2 (batch size,
   collection name, raw hit counts, filtered counts) to aid debugging.
 * Search results include structured fields such as document name,
@@ -240,15 +241,18 @@ document_processing:
   chunk_size: 200          # Words per chunk
   chunk_overlap: 50        # Overlapping words
 
-# Embeddings  
+# Embeddings
 embeddings:
-  model_name: "BAAI/bge-base-en-v1.5"
+  model_name: "BAAI/bge-large-en-v1.5"   # upgraded from bge-base-en-v1.5
   batch_size: 32
+  normalize: true
+  instruction_prefix: "Represent this document for retrieval: "         # used for chunks
+  query_instruction_prefix: "Represent this question for searching relevant passages: "  # used for queries
 
 # Search settings
 semantic_search:
   top_k: 5                 # Number of results to retrieve
-  similarity_threshold: 0.7
+  similarity_threshold: 0.0  # set to 0.0 to return all results (adjust as needed)
 ```
 
 ## 🔍 Troubleshooting
@@ -271,6 +275,29 @@ semantic_search:
    - Reduce `chunk_size` in config.yaml
    - Process documents in smaller batches
 
+5. **Low similarity scores**
+   - Ensure `instruction_prefix` (for chunks) and `query_instruction_prefix` (for queries)
+     are set separately in `config.yaml` — using the same prefix for both degrades scores
+   - Do not preprocess queries before encoding (no lowercasing/punctuation stripping)
+   - Use `bge-large-en-v1.5` instead of `bge-base-en-v1.5` for better accuracy
+   - After changing the model, delete the old ChromaDB collection and rebuild with `--force`:
+     ```powershell
+     Remove-Item -Recurse -Force data\vector_db\chroma_db
+     New-Item -ItemType Directory -Path data\vector_db\chroma_db
+     python src/phase2_semantic_search.py --force
+     ```
+
+6. **PyTorch not using GPU (CUDA not available)**
+   - Default PyTorch install is CPU-only. Reinstall with CUDA support:
+     ```bash
+     pip uninstall torch torchvision torchaudio -y
+     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+     ```
+   - Verify with:
+     ```bash
+     python -c "import torch; print(torch.cuda.is_available())"
+     ```
+
 ### Debug Mode
 
 Enable detailed logging:
@@ -285,7 +312,19 @@ logging.getLogger().setLevel(logging.DEBUG)
 1. **For large document collections:**
    - Use smaller chunk sizes (150-200 words)
    - Enable embedding caching
-   - Consider using GPU for embeddings
+   - Use GPU for embeddings (install CUDA-enabled PyTorch, see Troubleshooting)
+
+1. **Embedding model choice:**
+
+   | Model | Params | Embedding Dim | VRAM needed |
+   |---|---|---|---|
+   | bge-small-en-v1.5 | 33M | 384 | < 1 GB |
+   | bge-base-en-v1.5 | 109M | 768 | ~1 GB |
+   | bge-large-en-v1.5 | 335M | 1024 | ~2 GB |
+
+   Switch models by updating `embeddings.model_name` in `config.yaml`, then delete
+   the ChromaDB collection and run `--force` to rebuild (dimension mismatch will
+   cause errors if you skip this).
 
 2. **For faster queries:**
    - Reduce `top_k` in semantic search
