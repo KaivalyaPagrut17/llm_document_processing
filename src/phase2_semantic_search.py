@@ -140,8 +140,8 @@ class SemanticSearchEngine:
             # force=True — delete and recreate to avoid duplicates
             self.chroma_client.delete_collection(self.collection_name)
             logger.info(f"Deleted existing collection: {self.collection_name}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Collection '{self.collection_name}' does not exist yet, will create: {e}")
         self.collection = self.chroma_client.create_collection(self.collection_name)
         logger.info(f"Created new collection: {self.collection_name}")
 
@@ -198,8 +198,8 @@ class SemanticSearchEngine:
         if not hasattr(self, 'collection'):
             try:
                 self.collection = self.chroma_client.get_collection(self.collection_name)
-            except:
-                logger.error(f"Collection '{self.collection_name}' not found. Please initialize the database first.")
+            except Exception as e:
+                logger.error(f"Collection '{self.collection_name}' not found. Please initialize the database first. Error: {e}")
                 return []
         
         logger.info(f"Searching for: '{query}'")
@@ -302,7 +302,8 @@ class SemanticSearchEngine:
         if not hasattr(self, 'collection'):
             try:
                 self.collection = self.chroma_client.get_collection(self.collection_name)
-            except:
+            except Exception as e:
+                logger.warning(f"Collection not found: {e}")
                 return {"error": "Collection not found"}
         
         count = self.collection.count()
