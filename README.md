@@ -1,157 +1,73 @@
-# LLM Document Processing System - Phase 1–3 Implementation (75% Progress)
+# InsureQ — LLM Document Processing System
 
-## 🚀 Project Overview
+> End-to-end insurance document intelligence: ingestion → semantic search → LLM Q&A → REST API → Streamlit UI
 
-This project implements the first three phases of an LLM-based document processing system.
+**Status: Phase 1–4 Complete (100%)**
 
-**Currently implemented modules:**
+---
 
-• Document ingestion and preprocessing
-• Text extraction from PDF/DOCX files (with per-page metadata)
-• Document chunking (sentence, paragraph, hybrid, clause)
-• Embedding generation
-• Vector database storage using ChromaDB
-• Semantic search with optional cross-encoder reranking
-• Query intent classification
-• LLM reasoning engine (Qwen2.5-72B via HuggingFace Inference API)
-• Structured Q&A output with source attribution
+## 🚀 What It Does
 
-**Modules planned for next phase:**
+InsureQ processes insurance policy documents (PDF/DOCX) and lets you ask natural language questions about them. It uses a retrieval-augmented generation (RAG) pipeline backed by ChromaDB and Qwen2.5-72B.
 
-• REST API interface
-• Docker containerization
-• Cloud deployment
+---
 
 ## 📁 Project Structure
 
 ```
 llm_document_processing/
-├── README.md                      # This file
-├── requirements.txt               # Python dependencies
-├── config.yaml                    # Main configuration
-├── check_models.py                # Utility to test available HF models
-├── .gitignore                    # Git ignore file
+├── app.py                          # Streamlit UI (InsureQ)
+├── config.yaml                     # Central configuration
+├── requirements.txt                # All dependencies (Phase 1–4)
+├── Dockerfile
+├── docker-compose.yml
+├── .env                            # HF_TOKEN (gitignored)
 │
-├── data/                         # All data files
-│   ├── raw_documents/           # Place your PDF/DOCX/EML files here
-│   ├── processed/               # Generated processed files
-│   └── vector_db/               # ChromaDB storage
+├── data/
+│   ├── raw_documents/              # Place PDF/DOCX files here
+│   ├── processed/                  # chunked_documents.json, embeddings, etc.
+│   └── vector_db/chroma_db/        # ChromaDB persistent storage
 │
-└── src/                         # Main source code
-    ├── phase1_document_processing.py
-    ├── phase2_semantic_search.py
-    └── phase3_llm_engine.py
+├── logs/                           # Runtime logs
+│
+├── src/
+│   ├── phase1_document_processing.py
+│   ├── phase2_semantic_search.py
+│   ├── phase3_llm_engine.py
+│   └── phase4_api.py               # FastAPI REST API
+│
+└── notebooks/
+    ├── Phase1.ipynb
+    └── Phase2.ipynb
 ```
 
-## 🛠 Installation & Setup
+---
 
-### Step 1: Environment Setup
+## 🛠 Installation
 
 ```bash
+# 1. Create and activate virtual environment
 python -m venv venv
 
-# On Windows:
-venv\Scripts\activate
-# On macOS/Linux:
+# Windows
+.\venv\Scripts\activate
+# macOS/Linux
 source venv/bin/activate
 
+# 2. Install dependencies
 pip install -r requirements.txt
+
+# 3. Set your HuggingFace token in .env
+HF_TOKEN=your_token_here
 ```
 
-### Step 2: Configuration
+---
 
-Set your HuggingFace token in `config.yaml`:
-
-```yaml
-llm:
-  hf_token: "your_token_here"
-```
-
-Or set it as an environment variable and load it in code.
-
-### Step 3: Document Preparation
-
-Place your documents in `data/raw_documents/`:
-- Insurance policies (PDF)
-- Contracts (PDF, DOCX)
-- Email files (EML)
-- Text files (TXT)
-
-## 🏃 Quick Start
-
-```bash
-# Step 1: Process documents
-python src/phase1_document_processing.py
-
-# Step 2: Build semantic search index
-python src/phase2_semantic_search.py [--force]
-
-# Step 3: Run LLM Q&A engine
-python src/phase3_llm_engine.py
-```
-
-## 📝 Usage Examples
-
-### Phase 1: Document Processing
-
-```python
-from src.phase1_document_processing import DocumentProcessor
-
-processor = DocumentProcessor()
-processor.process_all_documents()
-```
-
-### Phase 2: Semantic Search
-
-```python
-from src.phase2_semantic_search import SemanticSearchEngine
-
-search = SemanticSearchEngine()
-search.build_index()
-results = search.semantic_search("knee surgery waiting period")
-```
-
-### Phase 3: LLM Reasoning
-
-```python
-from src.phase3_llm_engine import LLMEngine
-
-engine = LLMEngine()
-result = engine.query("Is knee surgery covered under my policy?")
-print(result["intent"])   # coverage_check
-print(result["answer"])   # LLM answer with source attribution
-print(result["sources"])  # list of matched chunks
-```
-
-**Interactive CLI:**
-```bash
-python src/phase3_llm_engine.py
-```
-
-## 🖼️ Architecture
-
-```mermaid
-flowchart LR
-    A[Insurance Documents] --> B[Text Extraction]
-    B --> C[Document Chunking]
-    C --> D[Embedding Generation]
-    D --> E[Vector Database ChromaDB]
-    E --> F[Semantic Search + Reranker]
-    F --> G[Intent Classification]
-    G --> H[LLM Reasoning Qwen2.5-72B]
-    H --> I[Structured Answer + Sources]
-
-    subgraph Future
-        J[REST API]
-        I --> J
-    end
-```
-
-## 🔧 Configuration
+## ⚙️ Configuration (`config.yaml`)
 
 ```yaml
 document_processing:
-  chunk_method: "clause"   # sentence | paragraph | hybrid | clause
+  chunk_method: "clause"       # sentence | paragraph | hybrid | clause
   chunk_size: 200
   chunk_overlap: 1
 
@@ -169,59 +85,193 @@ semantic_search:
 llm:
   provider: "huggingface"
   model: "Qwen/Qwen2.5-72B-Instruct"
-  hf_token: ""             # set your token here
+  hf_token: ""                 # leave empty — loaded from .env automatically
   temperature: 0.0
   max_tokens: 512
   context_token_limit: 3000
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  reload: false
+  workers: 1
 ```
 
-## 🔍 Troubleshooting
+> `hf_token` in config can be left empty. The system automatically loads `HF_TOKEN` from `.env` via `python-dotenv`.
 
-1. **"Config file not found"** — ensure `config.yaml` is in the project root
+---
 
-2. **"No documents found"** — place files in `data/raw_documents/`
+## 🏃 Quick Start
 
-3. **"ChromaDB collection not found"** — run Phase 2 first
+### Step 1 — Process documents
+```bash
+python src/phase1_document_processing.py
+```
 
-4. **Memory issues** — reduce `chunk_size` in config.yaml
+### Step 2 — Build semantic search index
+```bash
+python src/phase2_semantic_search.py
+# Force rebuild:
+python src/phase2_semantic_search.py --force
+```
 
-5. **Low similarity scores**
-   - Use separate `instruction_prefix` and `query_instruction_prefix`
-   - Do not preprocess queries before encoding
-   - After changing embedding model, delete ChromaDB and rebuild:
-     ```powershell
-     Remove-Item -Recurse -Force data\vector_db\chroma_db
-     python src/phase2_semantic_search.py --force
-     ```
+### Step 3 — Test LLM engine (CLI)
+```bash
+python src/phase3_llm_engine.py
+```
 
-6. **PyTorch not using GPU**
-   ```bash
-   pip uninstall torch torchvision torchaudio -y
-   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-   python -c "import torch; print(torch.cuda.is_available())"
-   ```
+### Step 4 — Start REST API
+```bash
+# Run from project root (not from src/)
+python src/phase4_api.py
+```
 
-7. **HuggingFace API errors** — verify your token has access to the model at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+### Step 5 — Launch Streamlit UI
+```bash
+# In a second terminal (API must be running)
+streamlit run app.py
+```
 
-## 📈 Performance Tips
+---
+
+## 🌐 REST API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | API status, model info, version |
+| POST | `/query` | LLM-powered Q&A with source attribution |
+| POST | `/search` | Semantic search (no LLM) |
+| POST | `/upload` | Upload and process a new document |
+| POST | `/reindex` | Rebuild ChromaDB vector index |
+| GET | `/stats` | Collection stats |
+
+Interactive docs available at `http://localhost:8000/docs` (Swagger UI).
+
+### Example: Query
+```bash
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Is knee surgery covered?", "top_k": 7}'
+```
+
+```json
+{
+  "query": "Is knee surgery covered?",
+  "intent": "coverage_check",
+  "answer": "...",
+  "sources": [...],
+  "latency_ms": 1234.5
+}
+```
+
+---
+
+## 🖥️ Streamlit UI (InsureQ)
+
+Launch with `streamlit run app.py` while the API is running. Opens at `http://localhost:8501`.
+
+### Pages
+
+**💬 Chat Q&A**
+- Conversational interface with chat bubbles
+- Intent badge on every response (coverage_check, exclusion_check, etc.)
+- Collapsible source attribution with document name, page, section, and similarity score
+- Response latency displayed per message
+- Clear conversation button
+
+**🔍 Semantic Search**
+- Direct vector similarity search without LLM
+- Animated score bar per result
+- Shows chunk text, file name, page number, chunk ID
+
+**📁 Document Management**
+- Upload PDF/DOCX files — auto-processed and indexed
+- Rebuild ChromaDB index with one click
+- Live index stats (chunk count, collection name, embedding model, similarity metric)
+
+**Sidebar**
+- API online/offline status pill
+- LLM model and embedding model info
+- Total indexed chunks counter
+- Top K slider (controls results for both Chat and Search)
+
+---
+
+## 🐳 Docker
+
+```bash
+# Build and run
+docker-compose up --build
+
+# API available at http://localhost:8000
+```
+
+`docker-compose.yml` mounts `./data` and `./logs` as volumes so documents and logs persist across restarts. The `.env` file is passed automatically for the HuggingFace token.
+
+---
+
+## 🔧 Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `ModuleNotFoundError` | Activate venv: `.\venv\Scripts\activate` then `pip install -r requirements.txt` |
+| `Collection not found` | Run Phase 2 first: `python src/phase2_semantic_search.py` |
+| `API Offline` in UI | Start API from project root: `python src/phase4_api.py` |
+| `hf_token` empty error | Add `HF_TOKEN=your_token` to `.env` file |
+| Low similarity scores | Delete ChromaDB and rebuild: `python src/phase2_semantic_search.py --force` |
+| GPU not detected | Reinstall PyTorch with CUDA: `pip install torch --index-url https://download.pytorch.org/whl/cu121` |
+
+---
+
+## 📊 Embedding Model Options
 
 | Model | Params | Embedding Dim | VRAM |
-|---|---|---|---|
+|-------|--------|---------------|------|
 | bge-small-en-v1.5 | 33M | 384 | < 1 GB |
 | bge-base-en-v1.5 | 109M | 768 | ~1 GB |
 | bge-large-en-v1.5 | 335M | 1024 | ~2 GB |
 
-- Switch models by updating `embeddings.model_name`, then delete ChromaDB and run `--force`
-- Enable `rerank: true` for better precision at the cost of speed
-- Use GPU-enabled PyTorch for faster embeddings
-
-## 🎯 Next Steps
-
-1. **API Layer** — REST API endpoints with FastAPI
-2. **Testing & Deployment** — integration tests, Docker, cloud deployment
+To switch models: update `embeddings.model_name` in `config.yaml`, delete `data/vector_db/chroma_db/`, then run Phase 2 with `--force`.
 
 ---
 
-**Current Status: Phase 1-3 Complete (75% Progress)**
+## 🖼️ Architecture
 
-This system provides end-to-end document processing, semantic search, and LLM-powered Q&A. The next phase will add a REST API and deployment infrastructure.
+```
+Insurance Documents
+        │
+        ▼
+ Text Extraction (Phase 1)
+ PDF/DOCX → per-page text + metadata
+        │
+        ▼
+ Document Chunking (Phase 1)
+ clause / sentence / paragraph / hybrid
+        │
+        ▼
+ Embedding Generation (Phase 2)
+ BAAI/bge-large-en-v1.5
+        │
+        ▼
+ ChromaDB Vector Store (Phase 2)
+        │
+        ▼
+ Semantic Search + Reranker (Phase 2)
+        │
+        ▼
+ Intent Classification (Phase 3)
+ coverage_check | exclusion | waiting_period | ...
+        │
+        ▼
+ LLM Reasoning — Qwen2.5-72B (Phase 3)
+ HuggingFace Inference API
+        │
+        ▼
+ Structured Answer + Sources (Phase 3)
+        │
+        ├──▶ FastAPI REST API (Phase 4)
+        │    /query /search /upload /reindex /stats /health
+        │
+        └──▶ Streamlit UI — InsureQ (Phase 4)
+             Chat Q&A | Semantic Search | Document Management
+```

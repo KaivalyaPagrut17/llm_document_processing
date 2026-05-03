@@ -3,14 +3,18 @@ Phase 3: LLM Reasoning Engine
 Query intent classification → context assembly → LLM answer → structured output
 """
 import json
+import os
 import re
 import yaml
+from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from pathlib import Path
 from typing import List, Dict, Any
 from loguru import logger
 
 from phase2_semantic_search import SemanticSearchEngine
+
+load_dotenv()
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +118,9 @@ class LLMEngine:
         with open(config_path, "r") as f:
             self.config = yaml.safe_load(f)
         self.llm_cfg = self.config["llm"]
+        # fallback to .env if token not set in config
+        if not self.llm_cfg.get("hf_token"):
+            self.llm_cfg["hf_token"] = os.getenv("HF_TOKEN", "")
         self.search_engine = SemanticSearchEngine(config_path)
         logger.info(f"LLM Engine ready | provider={self.llm_cfg['provider']} | model={self.llm_cfg['model']}")
 
