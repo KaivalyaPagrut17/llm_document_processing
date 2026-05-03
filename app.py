@@ -299,7 +299,7 @@ elif page == "📁 Documents":
             else:
                 with st.spinner(f"Processing {uploaded.name}…"):
                     try:
-                        res = _post("/upload", files={"file": (uploaded.name, uploaded.read())}, timeout=120)
+                        res = _post("/upload", files={"file": (uploaded.name, uploaded.read())}, timeout=300)
                         st.success(f"✅ **{res['filename']}** — {res['chunks_created']} chunks created")
                     except Exception as e:
                         st.error(f"Upload failed: {e}")

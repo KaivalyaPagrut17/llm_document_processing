@@ -11,6 +11,7 @@ from huggingface_hub import InferenceClient
 from pathlib import Path
 from typing import List, Dict, Any
 from loguru import logger
+from sentence_transformers import SentenceTransformer
 
 from phase2_semantic_search import SemanticSearchEngine
 
@@ -98,19 +99,6 @@ def build_prompt(query: str, context: str, intent: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# LLM clients
-# ---------------------------------------------------------------------------
-def call_huggingface(messages: list, model: str, hf_token: str, temperature: float, max_tokens: int) -> str:
-    client = InferenceClient(model=model, token=hf_token)
-    response = client.chat_completion(
-        messages=messages,
-        max_tokens=max_tokens,
-        temperature=max(temperature, 0.01),
-    )
-    return response.choices[0].message.content.strip()
-
-
-# ---------------------------------------------------------------------------
 # Main engine
 # ---------------------------------------------------------------------------
 class LLMEngine:
@@ -127,13 +115,13 @@ class LLMEngine:
         logger.info(f"LLM Engine ready | provider={self.llm_cfg['provider']} | model={self.llm_cfg['model']}")
 
     def _call_llm(self, messages: list) -> str:
-        return call_huggingface(
-            messages,
-            self.llm_cfg["model"],
-            self.llm_cfg["hf_token"],
-            self.llm_cfg["temperature"],
-            self.llm_cfg["max_tokens"]
+        client = InferenceClient(model=self.llm_cfg["model"], token=self.llm_cfg["hf_token"])
+        response = client.chat_completion(
+            messages=messages,
+            max_tokens=self.llm_cfg["max_tokens"],
+            temperature=max(self.llm_cfg["temperature"], 0.01),
         )
+        return response.choices[0].message.content.strip()
 
     def query(self, user_query: str) -> Dict[str, Any]:
         """Full pipeline: search → build context → LLM → structured output."""

@@ -9,6 +9,7 @@ project:
 # File Paths
 paths:
   raw_documents: "./data/raw_documents/"
+  user_documents: "./data/user_documents/"
   processed_data: "./data/processed/"
   vector_db: "./data/vector_db/chroma_db/"
   
@@ -40,6 +41,7 @@ embeddings:
 vector_db:
   provider: "chromadb"
   collection_name: "document_chunks"
+  user_collection_name: "user_chunks"
   similarity_metric: "cosine"
   persist_directory: "./data/vector_db/chroma_db/"
 
@@ -65,10 +67,3 @@ api:
   port: 8000
   reload: false
   workers: 1
-
-# Performance
-performance:
-  cache_embeddings: true
-  cache_ttl: 3600  # seconds
-  enable_gpu: true
-  max_batch_size: 32

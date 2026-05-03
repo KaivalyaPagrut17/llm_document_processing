@@ -1,22 +1,22 @@
 """
-Phase 4: REST API
-Exposes Phase 1-3 pipeline via FastAPI endpoints.
+Phase 4 - REST API
 """
-import os
 import sys
+import asyncio
 import shutil
 import time
+import re
 import yaml
 import uvicorn
 from dotenv import load_dotenv
 from pathlib import Path
 from typing import List, Optional
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from loguru import logger
-from werkzeug.utils import secure_filename
 
-# allow imports from src/
+PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
 
 from phase1_document_processing import DocumentProcessor
@@ -25,25 +25,33 @@ from phase3_llm_engine import LLMEngine
 
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 def load_config():
     with open(CONFIG_PATH, "r") as f:
         return yaml.safe_load(f)
 
-# ---------------------------------------------------------------------------
-# App
-# ---------------------------------------------------------------------------
-app = FastAPI(
-    title="LLM Document Processing API",
-    description="Document ingestion, semantic search and LLM-powered Q&A",
-    version="1.0.0",
-)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """On every API start: wipe user_chunks collection and user_documents folder contents."""
+    engine = get_search_engine()
+    try:
+        engine.chroma_client.delete_collection(engine.user_collection_name)
+        logger.info("user_chunks cleared on startup.")
+    except Exception:
+        pass
+    user_docs = PROJECT_ROOT / "data" / "user_documents"
+    user_docs.mkdir(parents=True, exist_ok=True)
+    for item in user_docs.iterdir():
+        try:
+            item.unlink() if item.is_file() else shutil.rmtree(item)
+        except Exception as e:
+            logger.warning(f"Could not delete {item.name}: {e}")
+    logger.info("user_documents/ cleared on startup.")
+    yield
 
-# lazy-loaded singletons
+app = FastAPI(title="InsureQ API", version="1.0.0", lifespan=lifespan)
+
 _search_engine: Optional[SemanticSearchEngine] = None
 _llm_engine: Optional[LLMEngine] = None
 
@@ -59,9 +67,10 @@ def get_llm_engine() -> LLMEngine:
         _llm_engine = LLMEngine(str(CONFIG_PATH))
     return _llm_engine
 
-# ---------------------------------------------------------------------------
-# Pydantic models
-# ---------------------------------------------------------------------------
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+
 class QueryRequest(BaseModel):
     query: str
     top_k: Optional[int] = None
@@ -112,9 +121,7 @@ class StatsResponse(BaseModel):
     embedding_model: str
     similarity_metric: str
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
@@ -138,7 +145,6 @@ def query(req: QueryRequest):
     except Exception as e:
         logger.error(f"/query error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
     return QueryResponse(
         query=result["query"],
         intent=result["intent"],
@@ -153,76 +159,66 @@ def search(req: SearchRequest):
     t0 = time.time()
     try:
         engine = get_search_engine()
-        top_k = req.top_k or engine.top_k
-        results = engine.semantic_search(req.query, top_k=top_k)
+        results = engine.semantic_search(req.query, top_k=req.top_k or engine.top_k)
     except Exception as e:
         logger.error(f"/search error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-    formatted = [
-        SearchResult(
-            rank=r["rank"],
-            text=r["text"],
-            similarity_score=round(r["similarity_score"], 4),
-            file_name=r["metadata"].get("file_name", "?"),
-            chunk_id=r["metadata"].get("chunk_id", "?"),
-            page=r["metadata"].get("page"),
-        )
-        for r in results
-    ]
     return SearchResponse(
         query=req.query,
-        results=formatted,
+        results=[
+            SearchResult(
+                rank=r["rank"],
+                text=r["text"],
+                similarity_score=round(r["similarity_score"], 4),
+                file_name=r["metadata"].get("file_name", "?"),
+                chunk_id=r["metadata"].get("chunk_id", "?"),
+                page=r["metadata"].get("page"),
+            )
+            for r in results
+        ],
         latency_ms=round((time.time() - t0) * 1000, 2),
     )
 
 
 @app.post("/upload", response_model=UploadResponse)
-def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...)):
     cfg = load_config()
-    raw_docs_path = Path(cfg["paths"]["raw_documents"])
+    user_docs_path = PROJECT_ROOT / "data" / "user_documents"
     supported = set(cfg["document_processing"]["supported_formats"])
 
-    safe_name = secure_filename(file.filename)
+    safe_name = re.sub(r"[^\w.\-]", "_", Path(file.filename).name).strip("_")
     if not safe_name:
         raise HTTPException(status_code=400, detail="Invalid filename.")
+    if Path(safe_name).suffix.lower() not in supported:
+        raise HTTPException(status_code=400, detail="Unsupported file type.")
 
-    suffix = Path(safe_name).suffix.lower()
-    if suffix not in supported:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix}")
-
-    dest = raw_docs_path / safe_name
+    dest = user_docs_path / safe_name
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
-    logger.info(f"Uploaded: {file.filename}")
 
     try:
-        # Step 1: extract + chunk only the new file
-        processor = DocumentProcessor(str(CONFIG_PATH))
-        all_chunks = processor.process_all_documents()
-        new_chunks = [c for c in all_chunks if c["file_name"] == safe_name]
-        logger.info(f"New file produced {len(new_chunks)} chunks")
-
-        # Step 2: embed + append only new chunks — no full rebuild
-        engine = get_search_engine()
-        inserted = engine.index_single_document(new_chunks)
+        loop = asyncio.get_event_loop()
+        chunks = await loop.run_in_executor(
+            None, DocumentProcessor(str(CONFIG_PATH)).process_single_document, dest
+        )
+        inserted = await loop.run_in_executor(
+            None, get_search_engine().index_user_document, chunks
+        )
     except Exception as e:
         logger.error(f"/upload error: {e}")
-        raise HTTPException(status_code=500, detail=f"Processing failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    return UploadResponse(
-        filename=safe_name,
-        chunks_created=inserted,
-        status="processed",
-    )
+    return UploadResponse(filename=safe_name, chunks_created=inserted, status="processed")
 
 
 @app.post("/reindex", response_model=ReindexResponse)
-def reindex():
+async def reindex():
     try:
         engine = get_search_engine()
-        engine.build_complete_search_index(force=True)
-        # reset singletons so next request picks up fresh index
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, lambda: engine.build_complete_search_index(force=True, force_embeddings=False)
+        )
         global _search_engine, _llm_engine
         _search_engine = None
         _llm_engine = None
@@ -235,8 +231,7 @@ def reindex():
 @app.get("/stats", response_model=StatsResponse)
 def stats():
     try:
-        engine = get_search_engine()
-        s = engine.get_collection_stats()
+        s = get_search_engine().get_collection_stats()
         if "error" in s:
             raise HTTPException(status_code=503, detail=s["error"])
     except HTTPException:
@@ -246,9 +241,6 @@ def stats():
     return StatsResponse(**s)
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     cfg = load_config()
     api_cfg = cfg.get("api", {})
