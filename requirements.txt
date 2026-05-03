@@ -58,5 +58,6 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 pydantic>=2.7.0
 python-multipart>=0.0.9    # file uploads
+werkzeug>=3.0.0            # secure_filename for upload path safety
 streamlit>=1.35.0
 requests>=2.31.0           # streamlit → API calls

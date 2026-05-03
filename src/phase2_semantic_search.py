@@ -16,9 +16,12 @@ from loguru import logger
 from tqdm import tqdm
 import yaml
 
+PROJECT_ROOT = Path(__file__).parent.parent
+
 class SemanticSearchEngine:
-    def __init__(self, config_path: str = "config.yaml"):
-        """Initialize semantic search engine with configuration"""
+    def __init__(self, config_path: str = None):
+        if config_path is None:
+            config_path = str(PROJECT_ROOT / "config.yaml")
         self.config = self._load_config(config_path)
         
         # Load embedding model
@@ -35,8 +38,8 @@ class SemanticSearchEngine:
         else:
             logger.info("Reranking disabled")
         
-        # Initialize ChromaDB
-        self.vector_db_path = Path(self.config['vector_db']['persist_directory'])
+        # Initialize ChromaDB — always relative to project root
+        self.vector_db_path = PROJECT_ROOT / self.config['vector_db']['persist_directory']
         self.vector_db_path.mkdir(parents=True, exist_ok=True)
         
         self.chroma_client = chromadb.PersistentClient(path=str(self.vector_db_path))
@@ -46,8 +49,8 @@ class SemanticSearchEngine:
         self.top_k = self.config['semantic_search']['top_k']
         self.similarity_threshold = self.config['semantic_search']['similarity_threshold']
         
-        # Paths
-        self.processed_path = Path(self.config['paths']['processed_data'])
+        # Paths — always relative to project root
+        self.processed_path = PROJECT_ROOT / self.config['paths']['processed_data']
 
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file"""
@@ -314,6 +317,61 @@ class SemanticSearchEngine:
             "embedding_model": self.config['embeddings']['model_name'],
             "similarity_metric": self.config['vector_db']['similarity_metric']
         }
+
+    def index_single_document(self, chunks: List[Dict[str, Any]]) -> int:
+        """Embed and append chunks for a single new document into the existing collection.
+
+        Does NOT touch existing vectors — only adds the new document's chunks.
+        Returns the number of chunks inserted.
+        """
+        if not chunks:
+            return 0
+
+        # ensure collection is loaded
+        if not hasattr(self, 'collection'):
+            try:
+                self.collection = self.chroma_client.get_collection(self.collection_name)
+            except Exception:
+                self.collection = self.chroma_client.create_collection(self.collection_name)
+
+        instruction = self.config['embeddings'].get('instruction_prefix', '')
+        texts = [instruction + c['text'] for c in chunks]
+
+        embeddings = self.model.encode(
+            texts,
+            batch_size=self.config['embeddings']['batch_size'],
+            normalize_embeddings=self.config['embeddings']['normalize'],
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        )
+
+        # use unique ids that won't collide with existing ones
+        existing_count = self.collection.count()
+        ids = [f"chunk_{existing_count + i}" for i in range(len(chunks))]
+        metadatas = [
+            {
+                "file_name": c['file_name'],
+                "chunk_id": c['chunk_id'],
+                "doc_type": c.get('doc_type', 'unknown'),
+                "chunk_index": c.get('chunk_index', 0),
+                "word_count": c.get('word_count', 0),
+                **({"page": c['page']} if 'page' in c else {}),
+            }
+            for c in chunks
+        ]
+
+        batch_size = 100
+        for i in range(0, len(chunks), batch_size):
+            end = min(i + batch_size, len(chunks))
+            self.collection.add(
+                ids=ids[i:end],
+                embeddings=embeddings[i:end].tolist(),
+                documents=[c['text'] for c in chunks[i:end]],
+                metadatas=metadatas[i:end],
+            )
+
+        logger.success(f"Indexed {len(chunks)} new chunks into existing collection.")
+        return len(chunks)
 
     def build_complete_search_index(self, force: bool = False) -> None:
         """Complete pipeline: generate embeddings and initialize database.

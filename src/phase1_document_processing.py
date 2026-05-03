@@ -46,11 +46,16 @@ def is_text_file(path: Path) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# project root = parent of src/
+PROJECT_ROOT = Path(__file__).parent.parent
+
 class DocumentProcessor:
-    def __init__(self, config_path: str = "config.yaml") -> None:
+    def __init__(self, config_path: str = None) -> None:
+        if config_path is None:
+            config_path = str(PROJECT_ROOT / "config.yaml")
         self.config = self._load_config(config_path)
-        self.raw_docs_path = Path(self.config["paths"]["raw_documents"])
-        self.processed_path = Path(self.config["paths"]["processed_data"])
+        self.raw_docs_path = PROJECT_ROOT / self.config["paths"]["raw_documents"]
+        self.processed_path = PROJECT_ROOT / self.config["paths"]["processed_data"]
         self.processed_path.mkdir(parents=True, exist_ok=True)
 
         self.supported_formats = {

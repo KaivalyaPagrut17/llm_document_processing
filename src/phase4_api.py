@@ -14,6 +14,7 @@ from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from loguru import logger
+from werkzeug.utils import secure_filename
 
 # allow imports from src/
 sys.path.insert(0, str(Path(__file__).parent))
@@ -182,27 +183,36 @@ def upload(file: UploadFile = File(...)):
     raw_docs_path = Path(cfg["paths"]["raw_documents"])
     supported = set(cfg["document_processing"]["supported_formats"])
 
-    suffix = Path(file.filename).suffix.lower()
+    safe_name = secure_filename(file.filename)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    suffix = Path(safe_name).suffix.lower()
     if suffix not in supported:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix}")
 
-    dest = raw_docs_path / file.filename
+    dest = raw_docs_path / safe_name
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
     logger.info(f"Uploaded: {file.filename}")
 
-    # reprocess all documents
     try:
+        # Step 1: extract + chunk only the new file
         processor = DocumentProcessor(str(CONFIG_PATH))
-        chunks = processor.process_all_documents()
-        doc_chunks = [c for c in chunks if c["file_name"] == file.filename]
+        all_chunks = processor.process_all_documents()
+        new_chunks = [c for c in all_chunks if c["file_name"] == safe_name]
+        logger.info(f"New file produced {len(new_chunks)} chunks")
+
+        # Step 2: embed + append only new chunks — no full rebuild
+        engine = get_search_engine()
+        inserted = engine.index_single_document(new_chunks)
     except Exception as e:
-        logger.error(f"/upload processing error: {e}")
+        logger.error(f"/upload error: {e}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {e}")
 
     return UploadResponse(
-        filename=file.filename,
-        chunks_created=len(doc_chunks),
+        filename=safe_name,
+        chunks_created=inserted,
         status="processed",
     )
 

@@ -114,7 +114,9 @@ def call_huggingface(messages: list, model: str, hf_token: str, temperature: flo
 # Main engine
 # ---------------------------------------------------------------------------
 class LLMEngine:
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = None):
+        if config_path is None:
+            config_path = str(Path(__file__).parent.parent / "config.yaml")
         with open(config_path, "r") as f:
             self.config = yaml.safe_load(f)
         self.llm_cfg = self.config["llm"]
